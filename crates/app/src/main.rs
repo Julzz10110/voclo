@@ -21,6 +21,7 @@ fn main() -> anyhow::Result<()> {
         stream.sample_rate,
         stream.channels as usize,
         viz_receiver,
+        audio_engine.recorder(),
         metrics,
     );
 

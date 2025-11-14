@@ -3,7 +3,13 @@
 //! The UI exposes basic controls for the effect chain and provides placeholders
 //! for forthcoming visualisations and preset management.
 
-use std::{collections::VecDeque, fs, path::PathBuf, sync::Arc};
+use std::{
+    collections::VecDeque,
+    fs,
+    path::PathBuf,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use anyhow::{anyhow, Context, Result};
 use eframe::{egui, App};
@@ -12,7 +18,9 @@ use egui_plot::{Line, Plot, PlotPoints};
 use rustfft::{num_complex::Complex32, FftPlanner};
 use serde::{Deserialize, Serialize};
 use tracing::{error, warn};
-use voclo_audio::{ProfilingMetrics, ProfilingSnapshot, SharedPipeline, VisualizationReceiver};
+use voclo_audio::{
+    AudioRecorder, ProfilingMetrics, ProfilingSnapshot, SharedPipeline, VisualizationReceiver,
+};
 use voclo_dsp::{EffectChain, EffectMetadata, ParameterRange, ParameterUnit, ParameterValue};
 use voclo_effects::{EffectKind, EffectRegistry};
 
@@ -34,6 +42,10 @@ pub struct GuiApp {
     fft: Arc<dyn rustfft::Fft<f32>>,
     metrics: Arc<ProfilingMetrics>,
     last_metrics: ProfilingSnapshot,
+    recorder: Arc<AudioRecorder>,
+    recording: bool,
+    last_recorded: Option<PathBuf>,
+    recording_error: Option<String>,
 }
 
 impl GuiApp {
@@ -42,6 +54,7 @@ impl GuiApp {
         sample_rate: u32,
         channels: usize,
         visualization: VisualizationReceiver,
+        recorder: Arc<AudioRecorder>,
         metrics: Arc<ProfilingMetrics>,
     ) -> Self {
         let preset_path = PathBuf::from(DEFAULT_PRESET_PATH);
@@ -60,6 +73,10 @@ impl GuiApp {
             fft,
             metrics,
             last_metrics: ProfilingSnapshot::default(),
+            recorder,
+            recording: false,
+            last_recorded: None,
+            recording_error: None,
         }
     }
 
@@ -279,6 +296,35 @@ impl GuiApp {
             ui.label("Insufficient data for spectrum.");
         }
     }
+
+    fn start_recording(&mut self) -> anyhow::Result<()> {
+        if self.recording {
+            return Ok(());
+        }
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let path = format!("recordings/recording-{timestamp}.wav");
+        self.recorder
+            .start(&path, self.sample_rate, self.channels)?;
+        self.recording = true;
+        self.last_recorded = Some(PathBuf::from(path));
+        self.recording_error = None;
+        Ok(())
+    }
+
+    fn stop_recording(&mut self) -> anyhow::Result<()> {
+        if !self.recording {
+            return Ok(());
+        }
+        let path = self.recorder.stop()?;
+        if let Some(path) = path {
+            self.last_recorded = Some(path);
+        }
+        self.recording = false;
+        Ok(())
+    }
 }
 
 impl App for GuiApp {
@@ -299,6 +345,20 @@ impl App for GuiApp {
                         error!("failed to load preset: {err:?}");
                     }
                 }
+                ui.add_space(16.0);
+                if self.recording {
+                    if ui.button("Stop Recording").clicked() {
+                        if let Err(err) = self.stop_recording() {
+                            error!("failed to stop recording: {err:?}");
+                            self.recording_error = Some(err.to_string());
+                        }
+                    }
+                } else if ui.button("Start Recording").clicked() {
+                    if let Err(err) = self.start_recording() {
+                        error!("failed to start recording: {err:?}");
+                        self.recording_error = Some(err.to_string());
+                    }
+                }
             });
             ui.label(format!(
                 "Pipeline: {} effects @ {} Hz / {} ch",
@@ -312,6 +372,12 @@ impl App for GuiApp {
                 self.last_metrics.max_latency_ms,
                 self.last_metrics.average_cpu_percent
             ));
+            if let Some(path) = &self.last_recorded {
+                ui.label(format!("Last recording: {}", path.display()));
+            }
+            if let Some(err) = &self.recording_error {
+                ui.colored_label(Color32::RED, err);
+            }
         });
 
         egui::SidePanel::left("effect_library")
