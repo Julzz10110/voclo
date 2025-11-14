@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "effects": [
+    {
+      "id": "filter",
+      "enabled": true,
+      "parameters": [
+        {
+          "id": "cutoff",
+          "value": 7500.0
+        },
+        {
+          "id": "resonance",
+          "value": 5.1
+        }
+      ]
+    }
+  ]
+}

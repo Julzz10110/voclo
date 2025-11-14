@@ -1,0 +1,18 @@
+[package]
+name = "voclo-gui"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+egui.workspace = true
+eframe.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+voclo-effects = { path = "../effects" }
+voclo-dsp = { path = "../dsp" }
+voclo-audio = { path = "../audio" }
+rustfft.workspace = true
+num-complex.workspace = true
+egui_plot = "0.29"
