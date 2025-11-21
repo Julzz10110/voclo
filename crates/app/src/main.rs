@@ -15,8 +15,10 @@ fn main() -> anyhow::Result<()> {
         .start()
         .context("failed to start audio engine")?;
 
+    let audio_engine = Arc::new(audio_engine);
     let metrics = audio_engine.metrics();
     let gui_app = GuiApp::new(
+        Arc::clone(&audio_engine),
         audio_engine.pipeline(),
         stream.sample_rate,
         stream.channels as usize,

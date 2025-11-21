@@ -19,10 +19,14 @@ use rustfft::{num_complex::Complex32, FftPlanner};
 use serde::{Deserialize, Serialize};
 use tracing::{error, warn};
 use voclo_audio::{
-    AudioRecorder, ProfilingMetrics, ProfilingSnapshot, SharedPipeline, VisualizationReceiver,
+    AudioEngine, AudioRecorder, DeviceDescriptor, ProfilingMetrics, ProfilingSnapshot,
+    SharedPipeline, VisualizationReceiver,
 };
 use voclo_dsp::{EffectChain, EffectMetadata, ParameterRange, ParameterUnit, ParameterValue};
 use voclo_effects::{EffectKind, EffectRegistry};
+
+mod settings;
+use settings::AppSettings;
 
 const DEFAULT_PRESET_PATH: &str = "presets/default.json";
 const PRESET_VERSION: u32 = 1;
@@ -30,6 +34,7 @@ const WAVEFORM_CAPACITY: usize = 4096;
 const FFT_SIZE: usize = 1024;
 
 pub struct GuiApp {
+    audio_engine: Arc<AudioEngine>,
     pipeline: SharedPipeline,
     registry: EffectRegistry,
     chain_model: Vec<EffectSlot>,
@@ -46,10 +51,18 @@ pub struct GuiApp {
     recording: bool,
     last_recorded: Option<PathBuf>,
     recording_error: Option<String>,
+    input_devices: Vec<DeviceDescriptor>,
+    output_devices: Vec<DeviceDescriptor>,
+    selected_input_device: Option<String>,
+    selected_output_device: Option<String>,
+    device_selection_error: Option<String>,
+    settings: AppSettings,
+    show_virtual_mic_help: bool,
 }
 
 impl GuiApp {
     pub fn new(
+        audio_engine: Arc<AudioEngine>,
         pipeline: SharedPipeline,
         sample_rate: u32,
         channels: usize,
@@ -60,7 +73,33 @@ impl GuiApp {
         let preset_path = PathBuf::from(DEFAULT_PRESET_PATH);
         let mut planner = FftPlanner::<f32>::new();
         let fft = planner.plan_fft_forward(FFT_SIZE);
+
+        let device_manager = audio_engine.device_manager();
+        let input_devices = device_manager.list_inputs().unwrap_or_default();
+        let output_devices = device_manager.list_outputs().unwrap_or_default();
+
+        let mut selected_input_device = audio_engine.current_input_device();
+        let mut selected_output_device = audio_engine.current_output_device();
+
+        let settings = AppSettings::load().unwrap_or_default();
+        // Use saved settings if available, otherwise use current engine settings
+        if selected_input_device.is_none() {
+            selected_input_device = settings.input_device.clone();
+        }
+        if selected_output_device.is_none() {
+            selected_output_device = settings.output_device.clone();
+            
+            // If no output device selected and virtual device available, suggest it
+            if selected_output_device.is_none() {
+                if let Ok(Some(virtual_device)) = device_manager.recommend_virtual_microphone_output() {
+                    // Don't auto-select, but we'll show it as recommended
+                    tracing::info!("Recommended virtual device: {}", virtual_device.name);
+                }
+            }
+        }
+
         Self {
+            audio_engine,
             pipeline,
             registry: EffectRegistry::with_builtin(),
             chain_model: Vec::new(),
@@ -77,6 +116,13 @@ impl GuiApp {
             recording: false,
             last_recorded: None,
             recording_error: None,
+            input_devices,
+            output_devices,
+            selected_input_device: selected_input_device.clone(),
+            selected_output_device: selected_output_device.clone(),
+            device_selection_error: None,
+            settings,
+            show_virtual_mic_help: false,
         }
     }
 
@@ -325,6 +371,56 @@ impl GuiApp {
         self.recording = false;
         Ok(())
     }
+
+    fn refresh_devices(&mut self) {
+        let device_manager = self.audio_engine.device_manager();
+        if let Ok(inputs) = device_manager.list_inputs() {
+            self.input_devices = inputs;
+        }
+        if let Ok(outputs) = device_manager.list_outputs() {
+            self.output_devices = outputs;
+            
+            // If no output device selected and virtual device available, suggest it
+            if self.selected_output_device.is_none() {
+                if let Ok(Some(virtual_device)) = device_manager.recommend_virtual_microphone_output() {
+                    // Auto-suggest virtual device but don't auto-select
+                    tracing::info!("Found virtual device: {}", virtual_device.name);
+                }
+            }
+        }
+    }
+
+    fn apply_device_selection(&mut self) {
+        self.device_selection_error = None;
+        
+        // Stop current streams
+        if let Err(err) = self.audio_engine.stop() {
+            self.device_selection_error = Some(format!("Failed to stop audio: {}", err));
+            return;
+        }
+
+        // Restart with new devices
+        match self.audio_engine.start_with_devices(
+            self.selected_input_device.as_deref(),
+            self.selected_output_device.as_deref(),
+        ) {
+            Ok(stream) => {
+                self.sample_rate = stream.sample_rate;
+                self.channels = stream.channels as usize;
+                self.device_selection_error = None;
+                
+                // Save settings
+                self.settings.input_device = self.selected_input_device.clone();
+                self.settings.output_device = self.selected_output_device.clone();
+                if let Err(err) = self.settings.save() {
+                    tracing::warn!("Failed to save settings: {}", err);
+                }
+            }
+            Err(err) => {
+                self.device_selection_error = Some(format!("Failed to start audio: {}", err));
+            }
+        }
+    }
 }
 
 impl App for GuiApp {
@@ -346,6 +442,13 @@ impl App for GuiApp {
                     }
                 }
                 ui.add_space(16.0);
+                if ui.button("Refresh Devices").clicked() {
+                    self.refresh_devices();
+                }
+                if ui.button("💡 Setup Virtual Mic").clicked() {
+                    self.show_virtual_mic_help = !self.show_virtual_mic_help;
+                }
+                ui.add_space(16.0);
                 if self.recording {
                     if ui.button("Stop Recording").clicked() {
                         if let Err(err) = self.stop_recording() {
@@ -360,6 +463,78 @@ impl App for GuiApp {
                     }
                 }
             });
+            ui.separator();
+            ui.horizontal(|ui| {
+                let current_input = self.selected_input_device.as_deref().unwrap_or("Default");
+                ComboBox::from_label("Input Device")
+                    .selected_text(current_input)
+                    .show_ui(ui, |ui| {
+                        if ui.selectable_label(
+                            self.selected_input_device.is_none(),
+                            "Default",
+                        ).clicked() {
+                            self.selected_input_device = None;
+                        }
+                        for device in &self.input_devices {
+                            let selected = self.selected_input_device.as_ref()
+                                .map(|s| s == &device.name)
+                                .unwrap_or(false);
+                            if ui.selectable_label(selected, &device.name).clicked() {
+                                self.selected_input_device = Some(device.name.clone());
+                            }
+                        }
+                    });
+                ui.add_space(8.0);
+                let current_output = self.selected_output_device.as_deref().unwrap_or("Default");
+                ComboBox::from_label("Output Device")
+                    .selected_text(current_output)
+                    .show_ui(ui, |ui| {
+                        if ui.selectable_label(
+                            self.selected_output_device.is_none(),
+                            "Default",
+                        ).clicked() {
+                            self.selected_output_device = None;
+                        }
+                        for device in &self.output_devices {
+                            let selected = self.selected_output_device.as_ref()
+                                .map(|s| s == &device.name)
+                                .unwrap_or(false);
+                            let display_name = if device.is_virtual_device() {
+                                format!("🎤 {}", device.name)
+                            } else {
+                                device.name.clone()
+                            };
+                            if ui.selectable_label(selected, display_name).clicked() {
+                                self.selected_output_device = Some(device.name.clone());
+                            }
+                        }
+                    });
+                ui.add_space(8.0);
+                if ui.button("Apply Devices").clicked() {
+                    self.apply_device_selection();
+                }
+            });
+            
+            // Show virtual microphone setup hint
+            if let Some(output) = &self.selected_output_device {
+                if let Some(device) = self.output_devices.iter().find(|d| &d.name == output) {
+                    if device.is_virtual_device() {
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            ui.label("💡 Virtual Microphone Mode:");
+                            ui.label("Set this device as microphone in Telegram/Discord/other apps");
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("📱 Telegram:");
+                            ui.label("Settings → Privacy → Voice Messages → Microphone");
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("🎮 Discord:");
+                            ui.label("Settings → Voice & Video → Input Device");
+                        });
+                    }
+                }
+            }
             ui.label(format!(
                 "Pipeline: {} effects @ {} Hz / {} ch",
                 self.chain_model.len(),
@@ -378,7 +553,83 @@ impl App for GuiApp {
             if let Some(err) = &self.recording_error {
                 ui.colored_label(Color32::RED, err);
             }
+            if let Some(err) = &self.device_selection_error {
+                ui.colored_label(Color32::RED, format!("Device error: {}", err));
+            }
         });
+        
+        // Show virtual microphone setup dialog
+        if self.show_virtual_mic_help {
+            egui::Window::new("Virtual Microphone Setup")
+                .collapsible(false)
+                .resizable(true)
+                .default_size([500.0, 400.0])
+                .show(ctx, |ui| {
+                    ui.heading("🎤 How to use Voclo as Virtual Microphone");
+                    ui.separator();
+                    
+                    ui.label("To use Voclo's processed voice in Telegram, Discord, or other apps:");
+                    ui.add_space(10.0);
+                    
+                    ui.label("1️⃣ Install a virtual audio cable:");
+                    ui.indent("virtual_mic_indent1", |ui| {
+                        ui.label("• Windows: VB-Audio Cable (free) - https://vb-audio.com/Cable/");
+                        ui.label("• macOS: BlackHole (free) - https://github.com/ExistentialAudio/BlackHole");
+                        ui.label("• Linux: PulseAudio null-sink (built-in)");
+                    });
+                    
+                    ui.add_space(10.0);
+                    ui.label("2️⃣ Configure Voclo:");
+                    ui.indent("virtual_mic_indent2", |ui| {
+                        ui.label("• Select your real microphone as Input Device");
+                        ui.label("• Select the virtual cable (🎤 device) as Output Device");
+                        ui.label("• Click 'Apply Devices'");
+                        ui.label("• Add effects and configure them");
+                    });
+                    
+                    ui.add_space(10.0);
+                    ui.label("3️⃣ Configure your app (Telegram/Discord/etc.):");
+                    ui.indent("virtual_mic_indent3", |ui| {
+                        ui.label("Telegram:");
+                        ui.indent("telegram_indent", |ui| {
+                            ui.label("Settings → Privacy → Voice Messages → Microphone");
+                            ui.label("Select the virtual cable (🎤 device)");
+                        });
+                        ui.add_space(5.0);
+                        ui.label("Discord:");
+                        ui.indent("discord_indent", |ui| {
+                            ui.label("Settings → Voice & Video → Input Device");
+                            ui.label("Select the virtual cable (🎤 device)");
+                        });
+                    });
+                    
+                    ui.add_space(15.0);
+                    ui.separator();
+                    
+                    let device_manager = self.audio_engine.device_manager();
+                    if let Ok(virtual_outputs) = device_manager.find_virtual_outputs() {
+                        if virtual_outputs.is_empty() {
+                            ui.colored_label(Color32::YELLOW, "⚠️ No virtual audio devices found!");
+                            ui.label("Please install a virtual audio cable (see step 1) and click 'Refresh Devices'");
+                        } else {
+                            ui.label("✅ Found virtual devices:");
+                            for device in virtual_outputs {
+                                ui.label(format!("  • 🎤 {}", device.name));
+                            }
+                        }
+                    }
+                    
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Close").clicked() {
+                            self.show_virtual_mic_help = false;
+                        }
+                        if ui.button("Refresh Devices").clicked() {
+                            self.refresh_devices();
+                        }
+                    });
+                });
+        }
 
         egui::SidePanel::left("effect_library")
             .resizable(true)
