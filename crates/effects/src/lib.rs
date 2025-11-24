@@ -1307,9 +1307,12 @@ impl PhaseVocoderChannel {
 
         for k in 0..=half {
             if self.syn_weight[k] > 0.0 {
+                // Normalize both frequency and magnitude by weight to preserve energy
                 self.syn_freq[k] /= self.syn_weight[k];
+                self.syn_magn[k] /= self.syn_weight[k];
             } else {
                 self.syn_freq[k] = (k as f32) * freq_per_bin;
+                // No input for this bin, keep magnitude at 0
             }
         }
 
@@ -1339,10 +1342,22 @@ impl PhaseVocoderChannel {
 
         self.fft_inverse.process(&mut self.fft_buffer);
 
+        // Normalize FFT output
         let scale = 1.0 / (fft_size as f32);
+        // Gain compensation to maintain consistent loudness
+        // Phase vocoder naturally changes amplitude when shifting pitch
+        // We need to compensate to keep output level similar to input
+        // Use square root of ratio for energy conservation
+        // Clamp to reasonable range to avoid extreme values
+        let gain_comp = (1.0 / pitch_ratio.sqrt()).clamp(0.5, 2.0);
+        
         for k in 0..fft_size {
             let value = self.fft_buffer[k].re * scale;
-            self.output_accum[k] += value * self.window[k] * (2.0 / (half as f32 * oversample));
+            // Apply windowing and gain compensation
+            // Original scaling was too aggressive: 2.0 / (half * oversample)
+            // New approach: simple normalization + gain compensation
+            // Multiply by 1.5 to boost overall level to compensate for processing loss
+            self.output_accum[k] += value * self.window[k] * gain_comp * 1.5;
         }
 
         for k in 0..step {

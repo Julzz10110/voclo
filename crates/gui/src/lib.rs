@@ -28,6 +28,9 @@ use voclo_effects::{EffectKind, EffectRegistry};
 mod settings;
 use settings::AppSettings;
 
+mod character_presets;
+use character_presets::{CharacterPreset, PresetCategory};
+
 const DEFAULT_PRESET_PATH: &str = "presets/default.json";
 const PRESET_VERSION: u32 = 1;
 const WAVEFORM_CAPACITY: usize = 4096;
@@ -202,6 +205,14 @@ impl GuiApp {
             .with_context(|| format!("failed to read preset file {}", self.preset_path.display()))?;
         let preset: Preset =
             serde_json::from_str(&data).context("failed to deserialize preset data")?;
+        self.apply_preset(preset)
+    }
+
+    fn load_character_preset(&mut self, character_preset: &CharacterPreset) -> Result<()> {
+        let preset = Preset {
+            version: PRESET_VERSION,
+            effects: character_preset.get_effects().clone(),
+        };
         self.apply_preset(preset)
     }
 
@@ -633,7 +644,7 @@ impl App for GuiApp {
 
         egui::SidePanel::left("effect_library")
             .resizable(true)
-            .default_width(240.0)
+            .default_width(280.0)
             .show(ctx, |ui| {
                 ui.heading("Effects");
                 ui.separator();
@@ -655,6 +666,83 @@ impl App for GuiApp {
                             }
                         }
                     });
+                
+                ui.separator();
+                ui.heading("Character Presets");
+                
+                let presets = CharacterPreset::all();
+                
+                // Group presets by category
+                let anime_presets: Vec<_> = presets.iter().filter(|p| p.category == PresetCategory::Anime).collect();
+                let game_presets: Vec<_> = presets.iter().filter(|p| p.category == PresetCategory::Game).collect();
+                let robot_presets: Vec<_> = presets.iter().filter(|p| p.category == PresetCategory::Robot).collect();
+                let monster_presets: Vec<_> = presets.iter().filter(|p| p.category == PresetCategory::Monster || p.category == PresetCategory::Demon).collect();
+                let fantasy_presets: Vec<_> = presets.iter().filter(|p| p.category == PresetCategory::Fantasy).collect();
+                
+                ui.collapsing("🎌 Anime", |ui| {
+                    for preset in anime_presets {
+                        if ui.button(preset.name).clicked() {
+                            if let Err(err) = self.load_character_preset(preset) {
+                                error!("failed to load character preset `{}`: {err:?}", preset.name);
+                            }
+                        }
+                        if !preset.description.is_empty() {
+                            ui.label(format!("  {}", preset.description));
+                        }
+                    }
+                });
+                
+                ui.collapsing("🎮 Game", |ui| {
+                    for preset in game_presets {
+                        if ui.button(preset.name).clicked() {
+                            if let Err(err) = self.load_character_preset(preset) {
+                                error!("failed to load character preset `{}`: {err:?}", preset.name);
+                            }
+                        }
+                        if !preset.description.is_empty() {
+                            ui.label(format!("  {}", preset.description));
+                        }
+                    }
+                });
+                
+                ui.collapsing("🤖 Robot", |ui| {
+                    for preset in robot_presets {
+                        if ui.button(preset.name).clicked() {
+                            if let Err(err) = self.load_character_preset(preset) {
+                                error!("failed to load character preset `{}`: {err:?}", preset.name);
+                            }
+                        }
+                        if !preset.description.is_empty() {
+                            ui.label(format!("  {}", preset.description));
+                        }
+                    }
+                });
+                
+                ui.collapsing("👹 Monster", |ui| {
+                    for preset in monster_presets {
+                        if ui.button(preset.name).clicked() {
+                            if let Err(err) = self.load_character_preset(preset) {
+                                error!("failed to load character preset `{}`: {err:?}", preset.name);
+                            }
+                        }
+                        if !preset.description.is_empty() {
+                            ui.label(format!("  {}", preset.description));
+                        }
+                    }
+                });
+                
+                ui.collapsing("🧙 Fantasy", |ui| {
+                    for preset in fantasy_presets {
+                        if ui.button(preset.name).clicked() {
+                            if let Err(err) = self.load_character_preset(preset) {
+                                error!("failed to load character preset `{}`: {err:?}", preset.name);
+                            }
+                        }
+                        if !preset.description.is_empty() {
+                            ui.label(format!("  {}", preset.description));
+                        }
+                    }
+                });
             });
 
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -845,20 +933,20 @@ struct ParameterControl {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct Preset {
-    version: u32,
-    effects: Vec<PresetEffect>,
+pub struct Preset {
+    pub version: u32,
+    pub effects: Vec<PresetEffect>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct PresetEffect {
-    id: String,
-    enabled: bool,
-    parameters: Vec<PresetParameter>,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PresetEffect {
+    pub id: String,
+    pub enabled: bool,
+    pub parameters: Vec<PresetParameter>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct PresetParameter {
-    id: String,
-    value: f32,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PresetParameter {
+    pub id: String,
+    pub value: f32,
 }
