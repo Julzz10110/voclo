@@ -1,0 +1,13 @@
+# Configuration for Windows linking
+# ONNX Runtime requires proper C++ standard library linking
+# Note: This is a known issue with ort 2.0.0-rc.10 on Windows
+# The issue is that ONNX Runtime was compiled with a different MSVC version
+[target.x86_64-pc-windows-msvc]
+rustflags = [
+    # Try to link with the correct C++ runtime
+    "-C", "link-arg=/NODEFAULTLIB:libcmt",
+    # Force use of dynamic runtime
+    "-C", "link-arg=/DEFAULTLIB:msvcrt",
+]
+
+

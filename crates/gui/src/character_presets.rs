@@ -51,6 +51,8 @@ impl CharacterPreset {
     pub fn all() -> Vec<&'static CharacterPreset> {
         vec![
             &ANIME_VOICE,
+            &ANIME_GIRL_VOICE,
+            &ANIME_BOY_VOICE,
             &CHIPMUNK_VOICE,
             &MONSTER_VOICE,
             &ROBOT_VOICE,
@@ -63,6 +65,8 @@ impl CharacterPreset {
     pub fn get_effects(&self) -> Vec<PresetEffect> {
         match self.id {
             "anime_voice" => anime_voice_effects(),
+            "anime_girl_voice" => anime_girl_voice_effects(),
+            "anime_boy_voice" => anime_boy_voice_effects(),
             "chipmunk_voice" => chipmunk_voice_effects(),
             "monster_voice" => monster_voice_effects(),
             "robot_voice" => robot_voice_effects(),
@@ -89,6 +93,28 @@ pub const ANIME_VOICE: CharacterPreset = CharacterPreset {
     category: PresetCategory::Anime,
     author: "Voclo Team",
     icon: "🎌",
+};
+
+/// Anime Girl Voice - Very high-pitched, bright and cute voice
+/// Optimized for female anime characters (moe, kawaii style)
+pub const ANIME_GIRL_VOICE: CharacterPreset = CharacterPreset {
+    id: "anime_girl_voice",
+    name: "Anime Girl Voice",
+    description: "Very high-pitched and bright - perfect for cute anime girls",
+    category: PresetCategory::Anime,
+    author: "Voclo Team",
+    icon: "🌸",
+};
+
+/// Anime Boy Voice - Moderately high-pitched, energetic voice
+/// Optimized for shounen anime protagonists
+pub const ANIME_BOY_VOICE: CharacterPreset = CharacterPreset {
+    id: "anime_boy_voice",
+    name: "Anime Boy Voice",
+    description: "Energetic and bright - perfect for shounen protagonists",
+    category: PresetCategory::Anime,
+    author: "Voclo Team",
+    icon: "⚡",
 };
 
 /// Chipmunk Voice - Very high pitch with raised formants
@@ -150,14 +176,14 @@ pub const DARTH_VADER_VOICE: CharacterPreset = CharacterPreset {
 
 fn anime_voice_effects() -> Vec<PresetEffect> {
     vec![
-        // Pitch shift up (sweet spot for anime: +3 to +6 semitones)
+        // Pitch shift up (improved: +5 semitones for more anime-like sound)
         PresetEffect {
             id: "pitch_shift".to_string(),
             enabled: true,
             parameters: vec![
                 PresetParameter {
                     id: "semitones".to_string(),
-                    value: 4.0, // +4 semitones (major third up)
+                    value: 5.0, // +5 semitones (perfect fourth up) - more anime-like
                 },
                 PresetParameter {
                     id: "mix".to_string(),
@@ -165,22 +191,167 @@ fn anime_voice_effects() -> Vec<PresetEffect> {
                 },
             ],
         },
-        // Formant shift up to make voice brighter and more youthful
+        // Formant shift up to make voice brighter and more youthful (increased)
         PresetEffect {
             id: "formant_shift".to_string(),
             enabled: true,
             parameters: vec![
                 PresetParameter {
                     id: "shift".to_string(),
-                    value: 1.3, // Shift formants up 30%
+                    value: 1.45, // Shift formants up 45% - more pronounced anime character
                 },
                 PresetParameter {
                     id: "mix".to_string(),
-                    value: 0.8, // 80% wet for subtle effect
+                    value: 0.85, // 85% wet for better balance
+                },
+            ],
+        },
+        // Light reverb for spatial presence (anime voices often have this quality)
+        PresetEffect {
+            id: "reverb".to_string(),
+            enabled: true,
+            parameters: vec![
+                PresetParameter {
+                    id: "decay".to_string(),
+                    value: 0.8, // Short decay for subtle space
+                },
+                PresetParameter {
+                    id: "mix".to_string(),
+                    value: 0.15, // 15% wet - very subtle
                 },
             ],
         },
         // Light gain boost for presence
+        PresetEffect {
+            id: "gain".to_string(),
+            enabled: true,
+            parameters: vec![
+                PresetParameter {
+                    id: "gain_db".to_string(),
+                    value: 2.5, // +2.5 dB for better presence
+                },
+                PresetParameter {
+                    id: "mix".to_string(),
+                    value: 1.0,
+                },
+            ],
+        },
+    ]
+}
+
+fn anime_girl_voice_effects() -> Vec<PresetEffect> {
+    vec![
+        // Very high pitch shift for cute girl voice
+        PresetEffect {
+            id: "pitch_shift".to_string(),
+            enabled: true,
+            parameters: vec![
+                PresetParameter {
+                    id: "semitones".to_string(),
+                    value: 6.0, // +6 semitones (tritone up) - very high and cute
+                },
+                PresetParameter {
+                    id: "mix".to_string(),
+                    value: 1.0,
+                },
+            ],
+        },
+        // Strong formant shift for bright, youthful sound
+        PresetEffect {
+            id: "formant_shift".to_string(),
+            enabled: true,
+            parameters: vec![
+                PresetParameter {
+                    id: "shift".to_string(),
+                    value: 1.5, // Shift formants up 50% - maximum brightness
+                },
+                PresetParameter {
+                    id: "mix".to_string(),
+                    value: 0.9, // 90% wet
+                },
+            ],
+        },
+        // Subtle reverb for kawaii quality
+        PresetEffect {
+            id: "reverb".to_string(),
+            enabled: true,
+            parameters: vec![
+                PresetParameter {
+                    id: "decay".to_string(),
+                    value: 0.6, // Short, bright reverb
+                },
+                PresetParameter {
+                    id: "mix".to_string(),
+                    value: 0.12, // 12% wet - very subtle
+                },
+            ],
+        },
+        // Gain boost for clarity
+        PresetEffect {
+            id: "gain".to_string(),
+            enabled: true,
+            parameters: vec![
+                PresetParameter {
+                    id: "gain_db".to_string(),
+                    value: 3.0, // +3 dB
+                },
+                PresetParameter {
+                    id: "mix".to_string(),
+                    value: 1.0,
+                },
+            ],
+        },
+    ]
+}
+
+fn anime_boy_voice_effects() -> Vec<PresetEffect> {
+    vec![
+        // Moderate pitch shift for energetic boy voice
+        PresetEffect {
+            id: "pitch_shift".to_string(),
+            enabled: true,
+            parameters: vec![
+                PresetParameter {
+                    id: "semitones".to_string(),
+                    value: 4.5, // +4.5 semitones - energetic but not too high
+                },
+                PresetParameter {
+                    id: "mix".to_string(),
+                    value: 1.0,
+                },
+            ],
+        },
+        // Moderate formant shift for youthful but not overly bright
+        PresetEffect {
+            id: "formant_shift".to_string(),
+            enabled: true,
+            parameters: vec![
+                PresetParameter {
+                    id: "shift".to_string(),
+                    value: 1.35, // Shift formants up 35%
+                },
+                PresetParameter {
+                    id: "mix".to_string(),
+                    value: 0.8, // 80% wet
+                },
+            ],
+        },
+        // Light reverb for presence
+        PresetEffect {
+            id: "reverb".to_string(),
+            enabled: true,
+            parameters: vec![
+                PresetParameter {
+                    id: "decay".to_string(),
+                    value: 1.0, // Medium decay
+                },
+                PresetParameter {
+                    id: "mix".to_string(),
+                    value: 0.18, // 18% wet
+                },
+            ],
+        },
+        // Gain boost
         PresetEffect {
             id: "gain".to_string(),
             enabled: true,

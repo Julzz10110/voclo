@@ -1,0 +1,27 @@
+[package]
+name = "voclo-ai"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+voclo-dsp = { path = "../dsp" }
+parking_lot.workspace = true
+once_cell.workspace = true
+
+# ONNX Runtime for model inference
+# Using RC version as stable 2.0 is not yet released
+# Enable download-binaries feature to automatically download ONNX Runtime binaries
+# NOTE: Known MSVC linking issues on Windows - requires specific MSVC runtime version
+# If linking fails, try:
+# 1. Install Visual Studio 2019 or 2022 with C++ build tools
+# 2. Or use a different ONNX runtime library
+ort = { version = "2.0.0-rc.10", features = ["download-binaries"] }
+
+# For audio buffer management
+ndarray = "0.16"
+

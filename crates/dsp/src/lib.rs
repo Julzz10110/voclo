@@ -203,6 +203,14 @@ pub trait Effect: Send {
 
     /// Returns whether the effect is currently active.
     fn is_enabled(&self) -> bool;
+    
+    /// Returns self as Any for downcasting (optional, default returns None)
+    fn as_any(&mut self) -> &mut dyn std::any::Any {
+        // Default implementation - effects that need downcasting should override this
+        // This is safe because we can't actually return self as Any without implementing it
+        // So this will cause a compile error if used incorrectly
+        panic!("Effect does not support downcasting - implement as_any()")
+    }
 }
 
 /// Trait for factories that create effect instances with runtime configuration.

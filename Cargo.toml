@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/app",
+    "crates/ai",
     "crates/audio",
     "crates/dsp",
     "crates/effects",

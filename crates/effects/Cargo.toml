@@ -10,5 +10,6 @@ serde_json.workspace = true
 tracing.workspace = true
 once_cell.workspace = true
 voclo-dsp = { path = "../dsp" }
+voclo-ai = { path = "../ai" }
 rustfft.workspace = true
 num-complex.workspace = true

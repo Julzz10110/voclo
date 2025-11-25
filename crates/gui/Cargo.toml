@@ -13,6 +13,7 @@ tracing.workspace = true
 voclo-effects = { path = "../effects" }
 voclo-dsp = { path = "../dsp" }
 voclo-audio = { path = "../audio" }
+voclo-ai = { path = "../ai" }
 rustfft.workspace = true
 num-complex.workspace = true
 egui_plot = "0.29"

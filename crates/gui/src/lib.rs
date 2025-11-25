@@ -17,13 +17,14 @@ use egui::{Color32, ComboBox, Context as EguiContext, Slider, SliderClamping, To
 use egui_plot::{Line, Plot, PlotPoints};
 use rustfft::{num_complex::Complex32, FftPlanner};
 use serde::{Deserialize, Serialize};
-use tracing::{error, warn};
+use tracing::{error, warn, info};
 use voclo_audio::{
     AudioEngine, AudioRecorder, DeviceDescriptor, ProfilingMetrics, ProfilingSnapshot,
     SharedPipeline, VisualizationReceiver,
 };
 use voclo_dsp::{EffectChain, EffectMetadata, ParameterRange, ParameterUnit, ParameterValue};
 use voclo_effects::{EffectKind, EffectRegistry};
+use voclo_ai::{ModelManager, AiVoiceConverterFactory, AI_VOICE_CONVERSION_ID};
 
 mod settings;
 use settings::AppSettings;
@@ -61,6 +62,10 @@ pub struct GuiApp {
     device_selection_error: Option<String>,
     settings: AppSettings,
     show_virtual_mic_help: bool,
+    // AI model management
+    model_manager: Arc<ModelManager>,
+    available_models: Vec<String>,
+    selected_model_for_slot: std::collections::HashMap<usize, String>,
 }
 
 impl GuiApp {
@@ -76,6 +81,13 @@ impl GuiApp {
         let preset_path = PathBuf::from(DEFAULT_PRESET_PATH);
         let mut planner = FftPlanner::<f32>::new();
         let fft = planner.plan_fft_forward(FFT_SIZE);
+
+        // Initialize AI model manager
+        let model_manager = Arc::new(ModelManager::new());
+        let available_models = model_manager.scan_models().unwrap_or_default()
+            .into_iter()
+            .map(|m| m.name)
+            .collect();
 
         let device_manager = audio_engine.device_manager();
         let input_devices = device_manager.list_inputs().unwrap_or_default();
@@ -101,10 +113,21 @@ impl GuiApp {
             }
         }
 
+        // Register AI voice conversion effect
+        let mut registry = EffectRegistry::with_builtin();
+        let ai_metadata = Arc::clone(&voclo_ai::AI_VOICE_CONVERSION_METADATA);
+        let ai_factory = AiVoiceConverterFactory::new(
+            ai_metadata,
+            Arc::clone(&model_manager),
+        );
+        if let Err(e) = registry.register(Box::new(ai_factory)) {
+            warn!("Failed to register AI voice conversion effect: {}", e);
+        }
+
         Self {
             audio_engine,
             pipeline,
-            registry: EffectRegistry::with_builtin(),
+            registry,
             chain_model: Vec::new(),
             sample_rate,
             channels,
@@ -126,6 +149,9 @@ impl GuiApp {
             device_selection_error: None,
             settings,
             show_virtual_mic_help: false,
+            model_manager,
+            available_models,
+            selected_model_for_slot: std::collections::HashMap::new(),
         }
     }
 
@@ -145,23 +171,93 @@ impl GuiApp {
     }
 
     fn add_effect(&mut self, kind: EffectKind) -> Result<()> {
+        self.add_effect_by_id(kind.id())
+    }
+    
+    fn add_effect_by_id(&mut self, effect_id: &str) -> Result<()> {
         let effect = self
             .registry
-            .create(kind.id(), self.sample_rate, self.channels)?;
+            .create(effect_id, self.sample_rate, self.channels)?;
         let metadata = self
             .registry
-            .metadata_by_id(kind.id())
-            .ok_or_else(|| anyhow!("metadata for effect `{}` not found", kind.id()))?;
+            .metadata_by_id(effect_id)
+            .ok_or_else(|| anyhow!("metadata for effect `{}` not found", effect_id))?;
         let slot = EffectSlot::from_metadata(metadata);
 
         let mut effect = Some(effect);
+        let slot_index = self.chain_model.len();
         self.pipeline.with_mut(move |chain| {
             if let Some(effect) = effect.take() {
                 chain.add_effect(effect);
             }
         });
         self.chain_model.push(slot);
+        
+        // If this is an AI effect, try to load the first available model
+        if effect_id == AI_VOICE_CONVERSION_ID && !self.available_models.is_empty() {
+            if let Some(first_model) = self.available_models.first() {
+                let model_name = first_model.clone();
+                self.selected_model_for_slot.insert(slot_index, model_name.clone());
+                // Load the model immediately
+                self.load_model_for_effect(slot_index, &model_name);
+            }
+        }
+        
         Ok(())
+    }
+    
+    fn load_model_for_effect(&mut self, slot_index: usize, model_name: &str) {
+        use voclo_ai::AiVoiceConverter;
+        
+        info!("🔄 Attempting to load model '{}' for effect at slot {}", model_name, slot_index);
+        
+        // First, make sure the model is registered in ModelManager
+        if self.model_manager.get_model(model_name).is_none() {
+            // Try to scan models again
+            if let Ok(models) = self.model_manager.scan_models() {
+                let model_names: Vec<String> = models.iter().map(|m| m.name.clone()).collect();
+                self.available_models = model_names;
+                info!("📋 Scanned models: {:?}", self.available_models);
+            }
+            
+            if self.model_manager.get_model(model_name).is_none() {
+                error!("❌ Model '{}' not found in ModelManager. Available models: {:?}", 
+                       model_name, self.available_models);
+                return;
+            }
+        }
+        
+        self.pipeline.with_mut(|chain| {
+            if let Some(effect) = nth_effect_mut(chain, slot_index) {
+                let effect_id = effect.metadata().id;
+                info!("🔍 Found effect at slot {}: ID='{}', name='{}'", 
+                      slot_index, effect_id, effect.metadata().name);
+                
+                // Check if this is the AI effect
+                if effect_id != AI_VOICE_CONVERSION_ID {
+                    warn!("⚠️ Effect at slot {} is not AI Voice Conversion (ID: '{}')", slot_index, effect_id);
+                    return;
+                }
+                
+                // Try to downcast to AiVoiceConverter
+                if let Some(ai_effect) = effect.as_any().downcast_mut::<AiVoiceConverter>() {
+                    info!("✅ Successfully downcast to AiVoiceConverter, loading model '{}'", model_name);
+                    match ai_effect.load_model(model_name) {
+                        Ok(()) => {
+                            info!("✅ Successfully loaded model '{}' in AI effect at slot {}", model_name, slot_index);
+                        }
+                        Err(e) => {
+                            error!("❌ Failed to load model '{}' in AI effect: {}", model_name, e);
+                        }
+                    }
+                } else {
+                    error!("❌ Failed to downcast effect at slot {} to AiVoiceConverter", slot_index);
+                    error!("   Effect type: {:?}", std::any::type_name_of_val(effect));
+                }
+            } else {
+                warn!("⚠️ No effect found at slot {}", slot_index);
+            }
+        });
     }
 
     fn set_effect_enabled(&mut self, index: usize, enabled: bool) {
@@ -662,6 +758,11 @@ impl App for GuiApp {
                                     if let Err(err) = self.add_effect(kind) {
                                         error!("failed to add effect `{id}`: {err:?}");
                                     }
+                                } else if id == AI_VOICE_CONVERSION_ID {
+                                    // Handle AI voice conversion effect
+                                    if let Err(err) = self.add_effect_by_id(&id) {
+                                        error!("failed to add AI effect `{id}`: {err:?}");
+                                    }
                                 }
                             }
                         }
@@ -811,6 +912,50 @@ impl App for GuiApp {
                                     }
                                 }
                             });
+                        }
+                        
+                        // Show model selector for AI voice conversion effects
+                        if slot.effect_id == AI_VOICE_CONVERSION_ID {
+                            ui.separator();
+                            ui.label("🤖 AI Model:");
+                            let current_model = self.selected_model_for_slot
+                                .get(&index)
+                                .cloned()
+                                .unwrap_or_else(|| "No model selected".to_string());
+                            
+                            let mut model_to_load: Option<String> = None;
+                            
+                            ComboBox::from_id_source(format!("ai_model_{}", index).as_str())
+                                .selected_text(&current_model)
+                                .show_ui(ui, |ui| {
+                                    if self.available_models.is_empty() {
+                                        ui.label("No models found");
+                                        ui.label("Place .onnx files in the 'models' directory");
+                                    } else {
+                                        for model_name in &self.available_models {
+                                            let selected = self.selected_model_for_slot
+                                                .get(&index)
+                                                .map(|s| s == model_name)
+                                                .unwrap_or(false);
+                                            if ui.selectable_label(selected, model_name).clicked() {
+                                                self.selected_model_for_slot.insert(index, model_name.clone());
+                                                // Store model name to load after UI scope ends
+                                                model_to_load = Some(model_name.clone());
+                                            }
+                                        }
+                                    }
+                                });
+                            
+                            // Load model after UI scope ends to avoid borrow issues
+                            if let Some(model_name) = model_to_load {
+                                self.load_model_for_effect(index, &model_name);
+                            }
+                            
+                            if ui.button("🔄 Refresh Models").clicked() {
+                                if let Ok(models) = self.model_manager.scan_models() {
+                                    self.available_models = models.into_iter().map(|m| m.name).collect();
+                                }
+                            }
                         }
                     }
                     if let Some(new_enabled) = changed_enabled {
